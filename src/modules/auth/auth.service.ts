@@ -35,6 +35,7 @@ interface LoginContext {
 const DUMMY_PASSWORD_HASH = argon2.hash('dummy-password-for-timing-safety');
 
 const REFRESH_WHITELIST_PREFIX = 'auth:refresh:';
+const ACCESS_BLACKLIST_PREFIX = 'auth:blacklist:';
 
 @Injectable()
 export class AuthService {
@@ -202,6 +203,32 @@ export class AuthService {
     }
 
     return tokens;
+  }
+
+  async logout(sessionId: string): Promise<void> {
+    // Delete the refresh whitelist entry FIRST. If this step were to fail
+    // and we'd already set the blacklist, /auth/refresh would keep working
+    // indefinitely for a session that looks "logged out" — the single
+    // highest-severity mistake possible in this design. Deleting the
+    // whitelist first means any partial failure below still leaves refresh
+    // broken for this session; only the already-issued access token would
+    // remain valid until its own (short) natural expiry.
+    await this.redis.del(REFRESH_WHITELIST_PREFIX + sessionId);
+
+    const { accessTtlMs } = this.getAccessTtl();
+    await this.redis.set(
+      ACCESS_BLACKLIST_PREFIX + sessionId,
+      '1',
+      'PX',
+      accessTtlMs,
+    );
+
+    await this.sessionsService.revoke(sessionId);
+  }
+
+  private getAccessTtl(): { accessTtl: string; accessTtlMs: number } {
+    const accessTtl = this.configService.get<string>('JWT_ACCESS_TTL', '15m');
+    return { accessTtl, accessTtlMs: ms(accessTtl as StringValue) };
   }
 
   private getRefreshTtl(): { refreshTtl: string; refreshTtlMs: number } {

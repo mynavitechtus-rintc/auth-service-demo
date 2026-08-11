@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { RedisService } from 'src/providers/redis/redis.service';
 
 export interface AccessTokenPayload {
   sub: string;
@@ -20,7 +21,10 @@ export interface RequestUser {
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(configService: ConfigService) {
+  constructor(
+    configService: ConfigService,
+    private readonly redis: RedisService,
+  ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
@@ -28,9 +32,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  validate(payload: AccessTokenPayload): RequestUser {
+  async validate(payload: AccessTokenPayload): Promise<RequestUser> {
     if (payload.type !== 'access') {
       throw new UnauthorizedException('Invalid token type');
+    }
+
+    const isBlacklisted = await this.redis.exists(
+      `auth:blacklist:${payload.sid}`,
+    );
+    if (isBlacklisted) {
+      throw new UnauthorizedException('Session has been revoked');
     }
 
     return {

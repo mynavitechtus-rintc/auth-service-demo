@@ -31,4 +31,11 @@ export class SessionsService {
       data: { lastActivityAt: new Date() },
     });
   }
+
+  async revoke(sessionId: string) {
+    return this.prisma.session.update({
+      where: { id: sessionId },
+      data: { isRevoked: true, revokedAt: new Date() },
+    });
+  }
 }
