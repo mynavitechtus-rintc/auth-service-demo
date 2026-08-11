@@ -1,98 +1,86 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Authentication & Session Service (NestJS + PostgreSQL + Redis)
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Service trung tâm xác thực (Centralized Authentication Server) và quản lý phiên làm việc đa thiết bị (Multi-device Session Management) cho các ứng dụng Web, Mobile và Admin Portal.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+---
 
-## Description
+## Tài liệu Bài toán
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+Mô tả bài toán nghiệp vụ (bối cảnh, vấn đề cần giải quyết, yêu cầu chức năng, tiêu chí hoàn thành) — không đi sâu kỹ thuật, phù hợp cho cả người không chuyên đọc hiểu:
 
-## Project setup
+* **[Bài toán: Authentication & Session Service (docs/PROBLEM_STATEMENT.md)](docs/PROBLEM_STATEMENT.md)**
 
+---
+
+## Chức năng Chính
+
+* **Authentication:** Đăng ký (Register), Đăng nhập (Login) bằng Email & Password.
+* **Stateless JWT:** Cấp phát Access Token có thời gian sống ngắn (short-lived JWT).
+* **Refresh Token Rotation:** Quản lý Refresh Token theo Session và cấp mới token an toàn.
+* **Multi-device Session Management:** Quản lý và theo dõi danh sách các thiết bị đang đăng nhập của từng người dùng.
+* **Token Blacklist & Whitelist (Redis):**
+  * **Whitelist:** Lưu giữ Refresh Token theo `sessionId` hợp lệ.
+  * **Blacklist:** Thu hồi Access Token lập tức khi Logout / Logout All thông qua Redis cache.
+* **Phân quyền Role-Based Access Control (RBAC):** Phân quyền người dùng theo Vai trò (Roles) và Quyền hạn (Permissions).
+* **Storage Stack:** PostgreSQL (Prisma ORM) cho dữ liệu hệ thống & Redis cho Session/Token tracking.
+
+---
+
+## Công Nghệ Sử Dụng
+
+* **Framework:** NestJS (TypeScript)
+* **ORM:** Prisma ORM
+* **Database:** PostgreSQL
+* **Cache / In-Memory Store:** Redis
+* **Token Standard:** JWT (`@nestjs/jwt`, `passport-jwt`)
+* **Package Manager:** `pnpm`
+
+---
+
+## Cài Đặt & Khởi Chạy
+
+### 1. Phục hồi dependencies
 ```bash
 $ pnpm install
 ```
 
-## Compile and run the project
-
+### 2. Thiết lập Biến Môi Trường (.env)
+Tạo file `.env` từ `.env.example`:
 ```bash
-# development
-$ pnpm run start
+$ cp .env.example .env
+```
 
-# watch mode
+Cấu hình các thông số PostgreSQL, Redis và JWT secret keys trong `.env`.
+
+### 3. Khởi chạy Database & Prisma
+```bash
+# Generate Prisma Client
+$ pnpm prisma generate
+
+# Run Database Migrations
+$ pnpm prisma migrate dev
+```
+
+### 4. Khởi chạy Ứng Dụng NestJS
+```bash
+# Watch mode (Development)
 $ pnpm run start:dev
 
-# production mode
+# Production mode
 $ pnpm run start:prod
 ```
 
-## Run tests
-
+### 5. Chạy Kiểm Thử (Tests)
 ```bash
-# unit tests
+# Unit tests
 $ pnpm run test
 
-# e2e tests
+# End-to-End tests
 $ pnpm run test:e2e
-
-# test coverage
-$ pnpm run test:cov
 ```
 
-## Deployment
+---
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+## Giấy phép
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ pnpm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+[MIT licensed](LICENSE)
