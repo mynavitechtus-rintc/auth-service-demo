@@ -35,6 +35,7 @@ async function main() {
     { name: 'users:read', description: 'Read user information' },
     { name: 'users:write', description: 'Create/update users' },
     { name: 'users:delete', description: 'Delete users' },
+    { name: 'users:list', description: 'List all user accounts' },
     { name: 'roles:read', description: 'Read roles' },
     { name: 'roles:write', description: 'Create/update roles' },
     { name: 'admin:config', description: 'Access admin configuration' },
@@ -82,7 +83,7 @@ async function main() {
     },
   });
 
-  console.log('Seed completed: 3 roles + 6 permissions');
+  console.log('Seed completed: 3 roles + 7 permissions');
 }
 
 main()
