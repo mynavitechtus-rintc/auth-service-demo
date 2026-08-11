@@ -3,13 +3,30 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { Prisma } from 'generated/prisma/client';
+import ms, { StringValue } from 'ms';
+import { UAParser } from 'ua-parser-js';
+import { RedisService } from 'src/providers/redis/redis.service';
+import { SessionsService } from '../sessions/sessions.service';
 import { UsersService } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { AccessTokenPayload } from './strategies/jwt.strategy';
+import { hashToken } from './utils/hash-token.util';
+
+interface RefreshTokenPayload {
+  sub: string;
+  sid: string;
+  type: 'refresh';
+}
+
+interface LoginContext {
+  ip?: string;
+  userAgent?: string;
+}
 
 // Precomputed once at module load so the "user not found" path in login()
 // pays the same argon2 cost as the "wrong password" path — otherwise the
@@ -17,11 +34,16 @@ import { AccessTokenPayload } from './strategies/jwt.strategy';
 // though both paths throw the same error message.
 const DUMMY_PASSWORD_HASH = argon2.hash('dummy-password-for-timing-safety');
 
+const REFRESH_WHITELIST_PREFIX = 'auth:refresh:';
+
 @Injectable()
 export class AuthService {
   constructor(
     private readonly usersService: UsersService,
+    private readonly sessionsService: SessionsService,
     private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+    private readonly redis: RedisService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -57,7 +79,10 @@ export class AuthService {
     return safeUser;
   }
 
-  async login(dto: LoginDto): Promise<{ accessToken: string }> {
+  async login(
+    dto: LoginDto,
+    context: LoginContext = {},
+  ): Promise<{ accessToken: string; refreshToken: string }> {
     const user = await this.usersService.findByEmail(dto.email);
     if (!user) {
       await argon2.verify(await DUMMY_PASSWORD_HASH, dto.password);
@@ -82,16 +107,136 @@ export class AuthService {
       ),
     ];
 
-    const payload: AccessTokenPayload = {
-      sub: user.id,
+    const { refreshTtl, refreshTtlMs } = this.getRefreshTtl();
+    const expiresAt = new Date(Date.now() + refreshTtlMs);
+    const deviceType = context.userAgent
+      ? (new UAParser(context.userAgent).getDevice().type ?? 'desktop')
+      : 'unknown';
+
+    const session = await this.sessionsService.createSession({
+      userId: user.id,
+      deviceType,
+      ip: context.ip,
+      userAgent: context.userAgent,
+      expiresAt,
+    });
+
+    const { accessToken, refreshToken } = await this.mintTokenPair(
+      user.id,
+      session.id,
+      roles,
+      permissions,
+      refreshTtl,
+    );
+
+    await this.redis.set(
+      REFRESH_WHITELIST_PREFIX + session.id,
+      hashToken(refreshToken),
+      'PX',
+      refreshTtlMs,
+    );
+
+    return { accessToken, refreshToken };
+  }
+
+  async refresh(
+    refreshToken: string,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
+    let payload: RefreshTokenPayload;
+    try {
+      payload = await this.jwtService.verifyAsync<RefreshTokenPayload>(
+        refreshToken,
+        { secret: this.configService.get<string>('JWT_REFRESH_SECRET') },
+      );
+    } catch {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    if (payload.type !== 'refresh') {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const whitelistKey = REFRESH_WHITELIST_PREFIX + payload.sid;
+    const storedHash = await this.redis.get(whitelistKey);
+    if (!storedHash || storedHash !== hashToken(refreshToken)) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const userRoles = await this.usersService.findRolesWithPermissions(
+      payload.sub,
+    );
+    const roles = userRoles.map((role) => role.name);
+    const permissions = [
+      ...new Set(
+        userRoles.flatMap((role) =>
+          role.permissions.map((permission) => permission.name),
+        ),
+      ),
+    ];
+
+    const { refreshTtl, refreshTtlMs } = this.getRefreshTtl();
+
+    const tokens = await this.mintTokenPair(
+      payload.sub,
+      payload.sid,
+      roles,
+      permissions,
+      refreshTtl,
+    );
+
+    await this.redis.set(
+      whitelistKey,
+      hashToken(tokens.refreshToken),
+      'PX',
+      refreshTtlMs,
+    );
+
+    // Best-effort only: the rotation above already succeeded and the new
+    // tokens are the source of truth for the response. If this throws (e.g.
+    // Session row missing/DB blip), the caller must still get their rotated
+    // tokens rather than being locked out by a failed timestamp update.
+    try {
+      await this.sessionsService.touchActivity(payload.sid);
+    } catch {
+      // no-op — see comment above
+    }
+
+    return tokens;
+  }
+
+  private getRefreshTtl(): { refreshTtl: string; refreshTtlMs: number } {
+    const refreshTtl = this.configService.get<string>('JWT_REFRESH_TTL', '7d');
+    return { refreshTtl, refreshTtlMs: ms(refreshTtl as StringValue) };
+  }
+
+  private async mintTokenPair(
+    userId: string,
+    sessionId: string,
+    roles: string[],
+    permissions: string[],
+    refreshTtl: string,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
+    const accessPayload: AccessTokenPayload = {
+      sub: userId,
+      sid: sessionId,
       roles,
       permissions,
       type: 'access',
     };
+    const refreshPayload: RefreshTokenPayload = {
+      sub: userId,
+      sid: sessionId,
+      type: 'refresh',
+    };
 
-    // secret/expiresIn already configured via JwtModule.registerAsync in auth.module.ts
-    const accessToken = await this.jwtService.signAsync(payload);
+    // Access token secret/expiresIn already configured via
+    // JwtModule.registerAsync in auth.module.ts.
+    const accessToken = await this.jwtService.signAsync(accessPayload);
+    const refreshToken = await this.jwtService.signAsync(refreshPayload, {
+      secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+      expiresIn: refreshTtl as JwtSignOptions['expiresIn'],
+    });
 
-    return { accessToken };
+    return { accessToken, refreshToken };
   }
 }

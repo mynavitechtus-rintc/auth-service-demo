@@ -5,6 +5,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 
 export interface AccessTokenPayload {
   sub: string;
+  sid: string;
   roles: string[];
   permissions: string[];
   type: 'access';
@@ -12,6 +13,7 @@ export interface AccessTokenPayload {
 
 export interface RequestUser {
   userId: string;
+  sessionId: string;
   roles: string[];
   permissions: string[];
 }
@@ -33,6 +35,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     return {
       userId: payload.sub,
+      sessionId: payload.sid,
       roles: payload.roles,
       permissions: payload.permissions,
     };
