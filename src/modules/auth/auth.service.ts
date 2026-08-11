@@ -205,7 +205,32 @@ export class AuthService {
     return tokens;
   }
 
-  async logout(sessionId: string): Promise<void> {
+  // Handles both "log out my own current session" (called with the caller's
+  // own sessionId/userId from the JWT) and "revoke an arbitrary session I
+  // own" (DELETE /auth/sessions/:id, sessionId from a URL param) — same
+  // operation either way, ownership is enforced identically in both cases.
+  async logout(sessionId: string, requesterId: string): Promise<void> {
+    // Ownership check happens first (inside sessionsService.revoke), before
+    // any Redis mutation, so a caller probing another user's session ID
+    // can't trigger a side effect before the 403 is raised.
+    await this.sessionsService.revoke(sessionId, requesterId);
+    await this.revokeSessionTokens(sessionId);
+  }
+
+  async logoutAll(userId: string): Promise<number> {
+    const sessions = await this.sessionsService.findActiveByUser(userId);
+    // allSettled, not all: one session's transient Redis blip shouldn't
+    // discard an otherwise-successful batch logout, and revokeAll() below
+    // should still run to reconcile Postgres for the sessions that did
+    // succeed (mirrors the best-effort reasoning in refresh()'s touchActivity
+    // call above).
+    await Promise.allSettled(
+      sessions.map((session) => this.revokeSessionTokens(session.id)),
+    );
+    return this.sessionsService.revokeAll(userId);
+  }
+
+  private async revokeSessionTokens(sessionId: string): Promise<void> {
     // Delete the refresh whitelist entry FIRST. If this step were to fail
     // and we'd already set the blacklist, /auth/refresh would keep working
     // indefinitely for a session that looks "logged out" — the single
@@ -222,8 +247,6 @@ export class AuthService {
       'PX',
       accessTtlMs,
     );
-
-    await this.sessionsService.revoke(sessionId);
   }
 
   private getAccessTtl(): { accessTtl: string; accessTtlMs: number } {

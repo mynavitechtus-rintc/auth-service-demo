@@ -43,7 +43,15 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @Post('logout')
   async logout(@Req() req: Request & { user: RequestUser }) {
-    await this.authService.logout(req.user.sessionId);
+    await this.authService.logout(req.user.sessionId, req.user.userId);
     return { message: 'Logged out' };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post('logout-all')
+  async logoutAll(@Req() req: Request & { user: RequestUser }) {
+    const count = await this.authService.logoutAll(req.user.userId);
+    return { message: 'Logged out from all devices', revokedCount: count };
   }
 }
