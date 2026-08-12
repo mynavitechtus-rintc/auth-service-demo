@@ -1,0 +1,360 @@
+{
+  "info": {
+    "_postman_id": "b1e0a1c0-2222-4a2b-8c3d-000000000002",
+    "name": "auth-service-demo",
+    "description": "Full 7-phase verification flow: register, multi-device login, protected route, RBAC, refresh rotation, session management, instant revocation, logout-all, IDOR check. Run folders top to bottom against the local environment.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "00 - Setup",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));"
+          ] } }]
+        },
+        {
+          "name": "Register User A",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "options": { "raw": { "language": "json" } }, "raw": "{\n  \"email\": \"{{emailA}}\",\n  \"password\": \"{{passwordA}}\",\n  \"firstName\": \"Demo\",\n  \"lastName\": \"UserA\"\n}" },
+            "url": { "raw": "{{baseUrl}}/auth/register", "host": ["{{baseUrl}}"], "path": ["auth", "register"] },
+            "description": "201 on fresh env. 409 means already registered (fine, will still be able to log in below) - reset first if you want a clean 201."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 201 or 409 (already registered)', () => pm.expect([201, 409]).to.include(pm.response.code));",
+            "if (pm.response.code === 201) { pm.test('response has no passwordHash', () => pm.expect(pm.response.json()).to.not.have.property('passwordHash')); }"
+          ] } }]
+        },
+        {
+          "name": "Register User B",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "options": { "raw": { "language": "json" } }, "raw": "{\n  \"email\": \"{{emailB}}\",\n  \"password\": \"{{passwordB}}\",\n  \"firstName\": \"Demo\",\n  \"lastName\": \"UserB\"\n}" },
+            "url": { "raw": "{{baseUrl}}/auth/register", "host": ["{{baseUrl}}"], "path": ["auth", "register"] },
+            "description": "Used later for the IDOR check (User B must not be able to revoke User A's session)."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 201 or 409 (already registered)', () => pm.expect([201, 409]).to.include(pm.response.code));"
+          ] } }]
+        }
+      ]
+    },
+    {
+      "name": "01 - RBAC Enforcement",
+      "item": [
+        {
+          "name": "Login - User A (pre-promotion, USER role)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" }
+            ],
+            "body": { "mode": "raw", "options": { "raw": { "language": "json" } }, "raw": "{\n  \"email\": \"{{emailA}}\",\n  \"password\": \"{{passwordA}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));",
+            "const json = pm.response.json();",
+            "pm.environment.set('accessToken1', json.accessToken);",
+            "pm.environment.set('refreshToken1', json.refreshToken);",
+            "const payload = JSON.parse(atob(json.accessToken.split('.')[1]));",
+            "pm.environment.set('sessionId1', payload.sid);",
+            "pm.test('token has USER role, no ADMIN yet', () => pm.expect(payload.roles).to.include('USER').and.not.include('ADMIN'));"
+          ] } }]
+        },
+        {
+          "name": "GET /users (expect 403 - USER lacks users:list)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken1}}" }] },
+            "url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] },
+            "description": "MANUAL STEP after this request: promote User A to ADMIN via database/Prisma Studio, then run the next request."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 403', () => pm.response.to.have.status(403));"
+          ] } }]
+        },
+        {
+          "name": "Re-Login - User A (post-promotion, ADMIN role)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" }
+            ],
+            "body": { "mode": "raw", "options": { "raw": { "language": "json" } }, "raw": "{\n  \"email\": \"{{emailA}}\",\n  \"password\": \"{{passwordA}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "description": "Run this only after promoting User A to ADMIN in the DB - roles are embedded in the JWT at login time, so a stale token won't reflect the new role. This becomes 'Device 1' for the rest of the demo; the pre-promotion session above is left active on purpose (harmless orphan session)."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));",
+            "const json = pm.response.json();",
+            "pm.environment.set('accessToken1', json.accessToken);",
+            "pm.environment.set('refreshToken1', json.refreshToken);",
+            "const payload = JSON.parse(atob(json.accessToken.split('.')[1]));",
+            "pm.environment.set('sessionId1', payload.sid);",
+            "pm.test('token now has ADMIN role', () => pm.expect(payload.roles).to.include('ADMIN'));"
+          ] } }]
+        },
+        {
+          "name": "GET /users (expect 200 - now ADMIN)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken1}}" }] },
+            "url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));",
+            "pm.test('response is a user list, no passwordHash', () => {",
+            "  const body = pm.response.json();",
+            "  pm.expect(body).to.be.an('array');",
+            "  body.forEach((u) => pm.expect(u).to.not.have.property('passwordHash'));",
+            "});"
+          ] } }]
+        }
+      ]
+    },
+    {
+      "name": "02 - Multi-Device Login",
+      "item": [
+        {
+          "name": "Login - Device 2 (Mobile Safari, User A)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "User-Agent", "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1" }
+            ],
+            "body": { "mode": "raw", "options": { "raw": { "language": "json" } }, "raw": "{\n  \"email\": \"{{emailA}}\",\n  \"password\": \"{{passwordA}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "description": "Same user, different User-Agent - creates an independent Session row/device with a different deviceType."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));",
+            "const json = pm.response.json();",
+            "pm.environment.set('accessToken2', json.accessToken);",
+            "pm.environment.set('refreshToken2', json.refreshToken);",
+            "const payload = JSON.parse(atob(json.accessToken.split('.')[1]));",
+            "pm.environment.set('sessionId2', payload.sid);",
+            "pm.test('sessionId2 differs from sessionId1', () => pm.expect(payload.sid).to.not.eql(pm.environment.get('sessionId1')));"
+          ] } }]
+        }
+      ]
+    },
+    {
+      "name": "03 - Protected Route Access",
+      "item": [
+        {
+          "name": "GET /users/me (Device 1 token)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken1}}" }] },
+            "url": { "raw": "{{baseUrl}}/users/me", "host": ["{{baseUrl}}"], "path": ["users", "me"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));",
+            "pm.test('sessionId matches device 1', () => pm.expect(pm.response.json().sessionId).to.eql(pm.environment.get('sessionId1')));"
+          ] } }]
+        },
+        {
+          "name": "GET /users/me (Device 2 token)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken2}}" }] },
+            "url": { "raw": "{{baseUrl}}/users/me", "host": ["{{baseUrl}}"], "path": ["users", "me"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));",
+            "pm.test('sessionId matches device 2', () => pm.expect(pm.response.json().sessionId).to.eql(pm.environment.get('sessionId2')));"
+          ] } }]
+        },
+        {
+          "name": "GET /users/me (no token, expect 401)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/users/me", "host": ["{{baseUrl}}"], "path": ["users", "me"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 401', () => pm.response.to.have.status(401));"
+          ] } }]
+        }
+      ]
+    },
+    {
+      "name": "04 - Refresh Token Rotation",
+      "item": [
+        {
+          "name": "Refresh - Device 1 (rotate)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "options": { "raw": { "language": "json" } }, "raw": "{\n  \"refreshToken\": \"{{refreshToken1}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/auth/refresh", "host": ["{{baseUrl}}"], "path": ["auth", "refresh"] }
+          },
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+              "pm.environment.set('oldRefreshToken1', pm.environment.get('refreshToken1'));"
+            ] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const json = pm.response.json();",
+              "pm.test('new refresh token differs from old', () => pm.expect(json.refreshToken).to.not.eql(pm.environment.get('oldRefreshToken1')));",
+              "pm.environment.set('accessToken1', json.accessToken);",
+              "pm.environment.set('refreshToken1', json.refreshToken);"
+            ] } }
+          ]
+        },
+        {
+          "name": "Refresh - Device 1 with OLD token (expect 401)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "options": { "raw": { "language": "json" } }, "raw": "{\n  \"refreshToken\": \"{{oldRefreshToken1}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/auth/refresh", "host": ["{{baseUrl}}"], "path": ["auth", "refresh"] },
+            "description": "The old refresh token was rotated out of the Redis whitelist by the previous request - reusing it must fail."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 401', () => pm.response.to.have.status(401));"
+          ] } }]
+        }
+      ]
+    },
+    {
+      "name": "05 - Multi-Device Session Management",
+      "item": [
+        {
+          "name": "List Sessions (Device 1 token)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken1}}" }] },
+            "url": { "raw": "{{baseUrl}}/auth/sessions", "host": ["{{baseUrl}}"], "path": ["auth", "sessions"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));",
+            "const ids = pm.response.json().map((s) => s.id);",
+            "pm.test('includes device 1 and device 2 sessions', () => {",
+            "  pm.expect(ids).to.include(pm.environment.get('sessionId1'));",
+            "  pm.expect(ids).to.include(pm.environment.get('sessionId2'));",
+            "});"
+          ] } }]
+        },
+        {
+          "name": "Login - User B",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "options": { "raw": { "language": "json" } }, "raw": "{\n  \"email\": \"{{emailB}}\",\n  \"password\": \"{{passwordB}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));",
+            "pm.environment.set('accessTokenB', pm.response.json().accessToken);"
+          ] } }]
+        },
+        {
+          "name": "IDOR - User B tries to revoke User A's session (expect 403)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessTokenB}}" }] },
+            "url": { "raw": "{{baseUrl}}/auth/sessions/{{sessionId1}}", "host": ["{{baseUrl}}"], "path": ["auth", "sessions", "{{sessionId1}}"] },
+            "description": "sessionId1 belongs to User A. User B must not be able to revoke it just by knowing/guessing the UUID."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 403', () => pm.response.to.have.status(403));"
+          ] } }]
+        }
+      ]
+    },
+    {
+      "name": "06 - Instant Revocation",
+      "item": [
+        {
+          "name": "Logout (Device 1)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken1}}" }] },
+            "url": { "raw": "{{baseUrl}}/auth/logout", "host": ["{{baseUrl}}"], "path": ["auth", "logout"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));"
+          ] } }]
+        },
+        {
+          "name": "GET /users/me (Device 1 token reused after logout, expect 401)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken1}}" }] },
+            "url": { "raw": "{{baseUrl}}/users/me", "host": ["{{baseUrl}}"], "path": ["users", "me"] },
+            "description": "Headline moment: the JWT itself has not expired, but it's now rejected because the session is blacklisted in Redis."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 401 (instant revocation, token not naturally expired)', () => pm.response.to.have.status(401));"
+          ] } }]
+        },
+        {
+          "name": "Refresh - Device 1 (after logout, expect 401)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "options": { "raw": { "language": "json" } }, "raw": "{\n  \"refreshToken\": \"{{refreshToken1}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/auth/refresh", "host": ["{{baseUrl}}"], "path": ["auth", "refresh"] },
+            "description": "Confirms logout also removed the refresh whitelist entry, not just the access blacklist."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 401', () => pm.response.to.have.status(401));"
+          ] } }]
+        }
+      ]
+    },
+    {
+      "name": "07 - Logout All Devices",
+      "item": [
+        {
+          "name": "Logout All (Device 2 token)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken2}}" }] },
+            "url": { "raw": "{{baseUrl}}/auth/logout-all", "host": ["{{baseUrl}}"], "path": ["auth", "logout-all"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));",
+            "pm.test('revokedCount >= 1', () => pm.expect(pm.response.json().revokedCount).to.be.at.least(1));"
+          ] } }]
+        },
+        {
+          "name": "GET /users/me (Device 2 token after logout-all, expect 401)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken2}}" }] },
+            "url": { "raw": "{{baseUrl}}/users/me", "host": ["{{baseUrl}}"], "path": ["users", "me"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 401', () => pm.response.to.have.status(401));"
+          ] } }]
+        }
+      ]
+    }
+  ]
+}
