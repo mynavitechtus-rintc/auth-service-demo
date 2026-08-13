@@ -87,6 +87,36 @@
           ] } }]
         },
         {
+          "name": "Refresh - User A (post-promotion, ADMIN via refresh, not re-login)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "options": { "raw": { "language": "json" } }, "raw": "{\n  \"refreshToken\": \"{{refreshToken1}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/auth/refresh", "host": ["{{baseUrl}}"], "path": ["auth", "refresh"] },
+            "description": "Proves refresh() re-fetches roles/permissions from Postgres too, not just login() - the same pre-promotion refreshToken1 now mints an ADMIN-claim access token, no password re-entry needed."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));",
+            "const json = pm.response.json();",
+            "pm.environment.set('accessToken1', json.accessToken);",
+            "pm.environment.set('refreshToken1', json.refreshToken);",
+            "const payload = JSON.parse(atob(json.accessToken.split('.')[1]));",
+            "pm.test('token now has ADMIN role via refresh alone', () => pm.expect(payload.roles).to.include('ADMIN'));"
+          ] } }]
+        },
+        {
+          "name": "GET /users (expect 200 - ADMIN via refresh, no re-login needed)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken1}}" }] },
+            "url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));"
+          ] } }]
+        },
+        {
           "name": "Re-Login - User A (post-promotion, ADMIN role)",
           "request": {
             "method": "POST",
@@ -96,7 +126,7 @@
             ],
             "body": { "mode": "raw", "options": { "raw": { "language": "json" } }, "raw": "{\n  \"email\": \"{{emailA}}\",\n  \"password\": \"{{passwordA}}\"\n}" },
             "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
-            "description": "Run this only after promoting User A to ADMIN in the DB - roles are embedded in the JWT at login time, so a stale token won't reflect the new role. This becomes 'Device 1' for the rest of the demo; the pre-promotion session above is left active on purpose (harmless orphan session)."
+            "description": "Alternative path to the Refresh step above - re-login also re-mints ADMIN claims, and starts a brand new session that becomes 'Device 1' for the rest of the demo. The pre-promotion/refresh-demo session above is left active on purpose (harmless orphan session)."
           },
           "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
             "pm.test('status 200', () => pm.response.to.have.status(200));",
@@ -232,6 +262,20 @@
           "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
             "pm.test('status 401', () => pm.response.to.have.status(401));"
           ] } }]
+        },
+        {
+          "name": "GET /users/me (Device 1, current token still valid after failed reuse attempt)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken1}}" }] },
+            "url": { "raw": "{{baseUrl}}/users/me", "host": ["{{baseUrl}}"], "path": ["users", "me"] },
+            "description": "Proves the reuse rejection above is scoped to the stale token only - the current rotated session is not auto-killed by a detected replay attempt."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('status 200', () => pm.response.to.have.status(200));",
+            "pm.test('sessionId matches device 1', () => pm.expect(pm.response.json().sessionId).to.eql(pm.environment.get('sessionId1')));"
+          ] } }]
         }
       ]
     },
@@ -248,10 +292,17 @@
           },
           "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
             "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "const ids = pm.response.json().map((s) => s.id);",
+            "const sessions = pm.response.json();",
+            "const ids = sessions.map((s) => s.id);",
             "pm.test('includes device 1 and device 2 sessions', () => {",
             "  pm.expect(ids).to.include(pm.environment.get('sessionId1'));",
             "  pm.expect(ids).to.include(pm.environment.get('sessionId2'));",
+            "});",
+            "pm.test('each session exposes deviceType and lastActivityAt', () => {",
+            "  sessions.forEach((s) => {",
+            "    pm.expect(s).to.have.property('deviceType');",
+            "    pm.expect(s).to.have.property('lastActivityAt');",
+            "  });",
             "});"
           ] } }]
         },
