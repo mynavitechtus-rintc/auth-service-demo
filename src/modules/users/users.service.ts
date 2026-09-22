@@ -34,7 +34,7 @@ export class UsersService {
       where: { id: userId },
       include: { roles: { include: { permissions: true } } },
     });
-    return user?.roles ?? [];
+    return { isActive: user?.isActive ?? false, roles: user?.roles ?? [] };
   }
 
   async create(data: CreateUserData) {

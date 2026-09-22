@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -98,7 +99,15 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const userRoles = await this.usersService.findRolesWithPermissions(user.id);
+    // Checked after password verification, not before: the credentials are
+    // already proven correct at this point, so surfacing a distinct message
+    // doesn't leak anything an attacker couldn't already infer.
+    if (!user.isActive) {
+      throw new ForbiddenException('Account has been disabled');
+    }
+
+    const { roles: userRoles } =
+      await this.usersService.findRolesWithPermissions(user.id);
     const roles = userRoles.map((role) => role.name);
     const permissions = [
       ...new Set(
@@ -163,9 +172,17 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    const userRoles = await this.usersService.findRolesWithPermissions(
-      payload.sub,
-    );
+    const { isActive, roles: userRoles } =
+      await this.usersService.findRolesWithPermissions(payload.sub);
+
+    // A previously-issued refresh token stays cryptographically valid even
+    // after an account is disabled — this is the enforcement point that
+    // catches that case (the account may have been active when the token
+    // whitelist entry above was created).
+    if (!isActive) {
+      throw new ForbiddenException('Account has been disabled');
+    }
+
     const roles = userRoles.map((role) => role.name);
     const permissions = [
       ...new Set(
