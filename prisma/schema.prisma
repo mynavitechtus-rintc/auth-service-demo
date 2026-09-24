@@ -1,0 +1,64 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  firstName    String?
+  lastName     String?
+  avatarUrl    String?
+  isActive     Boolean   @default(true)
+  roles        Role[]
+  sessions     Session[]
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model Role {
+  id          String       @id @default(uuid())
+  name        String       @unique // "USER" | "MODERATOR" | "ADMIN"
+  description String?
+  users       User[]
+  permissions Permission[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  name        String   @unique // convention "resource:action", vd "users:read"
+  description String?
+  roles       Role[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Session {
+  id             String    @id @default(uuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceType     String?
+  userAgent      String?
+  ipAddress      String?
+  isRevoked      Boolean   @default(false)
+  revokedAt      DateTime?
+  lastActivityAt DateTime  @default(now())
+  expiresAt      DateTime
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([userId, isRevoked])
+}
