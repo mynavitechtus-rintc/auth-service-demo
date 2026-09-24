@@ -1,186 +1,119 @@
-# Authentication & Session Service (NestJS + PostgreSQL + Redis)
+# Auth Service Demo
 
-Service trung tâm xác thực (Centralized Authentication Server) và quản lý phiên làm việc đa thiết bị (Multi-device Session Management) cho các ứng dụng Web, Mobile và Admin Portal.
-
----
-
-## Tài liệu
-
-* **[Bài toán nghiệp vụ (docs/PROBLEM_STATEMENT.md)](docs/PROBLEM_STATEMENT.md)** — bối cảnh, yêu cầu chức năng, tiêu chí hoàn thành, không đi sâu kỹ thuật.
-* **[Auth flow giải thích chi tiết (docs/AUTH_FLOW_EXPLAINED.md)](docs/AUTH_FLOW_EXPLAINED.md)** — vì sao thiết kế JWT + Redis whitelist/blacklist + RBAC như vậy, kèm danh sách giới hạn đã biết.
+Service xác thực (Authentication) và quản lý phiên làm việc đa thiết bị (Multi-device Session Management) xây dựng bằng NestJS, PostgreSQL (Prisma ORM) và Redis.
 
 ---
 
-## Chức Năng Chính
+## Tech Stack
 
-* **Authentication:** Đăng ký (Register), Đăng nhập (Login) bằng Email & Password.
-* **Stateless JWT:** Cấp phát Access Token có thời gian sống ngắn (short-lived JWT).
-* **Refresh Token Rotation:** Quản lý Refresh Token theo Session và cấp mới token an toàn.
-* **Multi-device Session Management:** Quản lý và theo dõi danh sách các thiết bị đang đăng nhập của từng người dùng.
-* **Token Blacklist & Whitelist (Redis):**
-  * **Whitelist:** Lưu giữ Refresh Token theo `sessionId` hợp lệ.
-  * **Blacklist:** Thu hồi Access Token lập tức khi Logout / Logout All thông qua Redis cache.
-* **Phân quyền Role-Based Access Control (RBAC):** Phân quyền người dùng theo Vai trò (Roles) và Quyền hạn (Permissions).
-* **Storage Stack:** PostgreSQL (Prisma ORM) cho dữ liệu hệ thống & Redis cho Session/Token tracking.
+* **Backend Framework:** NestJS (TypeScript)
+* **Database & ORM:** PostgreSQL + Prisma ORM
+* **Caching & Token Store:** Redis (`ioredis`)
+* **Auth & Security:** JWT (`@nestjs/jwt`, `passport-jwt`), Argon2, Helmet, Throttler (Rate Limiting)
+* **API Documentation:** Swagger / OpenAPI 3 (`@nestjs/swagger`)
+* **DevOps & Tooling:** Docker Compose, Makefile, `pnpm`
 
 ---
 
-## Công Nghệ Sử Dụng
+## 📖 API Documentation & Swagger
 
-* **Framework:** NestJS (TypeScript)
-* **ORM:** Prisma ORM
-* **Database:** PostgreSQL
-* **Cache / In-Memory Store:** Redis
-* **Token Standard:** JWT (`@nestjs/jwt`, `passport-jwt`)
-* **API Docs:** Swagger (`@nestjs/swagger`), chỉ bật khi `NODE_ENV != production`
-* **Package Manager:** `pnpm`
+* **Swagger UI:** [http://localhost:3000/docs](http://localhost:3000/docs) *(chạy ở môi trường development)*
+* **Postman Collection & Environment:** Thư mục [`postman/`](postman/) (chứa sẵn bộ test flow kèm assertions)
+* **Tài liệu chi tiết luồng xác thực:** [`docs/AUTH_FLOW_EXPLAINED.md`](docs/AUTH_FLOW_EXPLAINED.md)
+* **Mô tả bài toán & yêu cầu:** [`docs/PROBLEM_STATEMENT.md`](docs/PROBLEM_STATEMENT.md)
 
 ---
 
-## Yêu Cầu Môi Trường
+## 🚀 Cách Setup & Chạy Ứng Dụng
 
-* Node.js (bản LTS gần nhất) + `pnpm`
-* Docker Desktop đang chạy — Postgres và Redis chạy qua `docker-compose.yml`, không cần cài đặt native.
+### Yêu cầu môi trường
+* Node.js (bản LTS) & `pnpm`
+* Docker Desktop đang bật
 
----
+### Các bước cài đặt
 
-## Cài Đặt Lần Đầu
+1. **Tạo file cấu hình môi trường:**
+   ```bash
+   cp .env.example .env
+   ```
+   *(Các thông số mặc định đã khớp sẵn với cấu hình Docker Compose).*
 
-```bash
-# 1. Tạo file .env từ mẫu
-cp .env.example .env
-# Điền JWT_ACCESS_SECRET, JWT_REFRESH_SECRET (chuỗi bất kỳ, đủ dài).
-# DATABASE_URL mặc định khớp docker-compose.yml:
-#   postgresql://postgres:postgres@localhost:5432/auth_service_demo
+2. **Cài đặt và chuẩn bị database (chạy 1 lệnh duy nhất):**
+   ```bash
+   make setup
+   ```
+   Lệnh này sẽ tự động:
+   * Bật container PostgreSQL (5432) và Redis (6379) qua Docker.
+   * Cài đặt thư viện dependencies (`pnpm install`).
+   * Chạy Prisma migration và seed sẵn Roles (`USER`, `MODERATOR`, `ADMIN`) cùng các Permissions mặc định.
 
-# 2. Cài dependencies + lên Docker + migrate + seed role/permission mặc định
-make setup
-```
+3. **Khởi động server:**
+   ```bash
+   make dev
+   ```
+   Server chạy tại: `http://localhost:3000`.
 
-`make setup` gộp toàn bộ các bước cần thiết: `docker compose up -d` (Postgres + Redis) → `pnpm install` → `prisma generate` → `prisma migrate dev` → `pnpm run seed` (tạo sẵn 3 role `USER` / `MODERATOR` / `ADMIN` + 7 permission, xem `prisma/seed.ts`).
+### Các lệnh tiện ích khác (Makefile)
 
----
-
-## Khởi Chạy Ứng Dụng
-
-```bash
-make dev
-```
-
-`make dev` tự đảm bảo Postgres + Redis đang chạy (`db-up`), giải phóng port 3000 nếu đang bị process khác giữ (`kill-port`), rồi start NestJS ở watch mode. App chạy tại `http://localhost:3000`.
-
-### Các Lệnh Make
-
-| Lệnh | Việc làm |
+| Lệnh | Ý nghĩa |
 |---|---|
-| `make dev` (hoặc `make start`) | Đảm bảo Postgres + Redis chạy, giải phóng port app, start watch mode |
-| `make db-up` | Chỉ start container Postgres + Redis, không chạy app |
-| `make db-down` | Dừng container Postgres + Redis (giữ nguyên data) |
-| `make setup` | Cài đặt lần đầu: cài deps, generate Prisma Client, migrate, seed |
-| `make reset` | **Xoá sạch volume Postgres** (mất hết user/session đã tạo), tạo lại container, migrate + seed từ đầu |
-| `make kill-port` | Kill process đang giữ port app (mặc định 3000) |
-| `make kill-db-ports` | Kill process đang giữ port 5432 (Postgres) / 6379 (Redis) |
-| `make help` | In lại bảng lệnh này |
-
-**Khi nào dùng `make reset`:** dữ liệu test bị rối (nhiều session/user cũ), hoặc cần chạy lại bộ Postman collection từ một DB sạch. Đây là thao tác **phá huỷ** và không có bước xác nhận lại — chỉ chạy khi chắc chắn không cần data hiện tại.
-
-### Chạy Docker Thủ Công (Không Qua Makefile)
-
-```bash
-docker compose up -d      # start Postgres (5432) + Redis (6379)
-docker compose down       # dừng container, giữ data
-docker compose down -v    # dừng + xoá luôn volume Postgres (mất data, tương đương bước đầu của make reset)
-```
-
-Redis trong `docker-compose.yml` **không có volume** — restart container Redis là mất sạch whitelist/blacklist token (khác với Postgres có `pgdata` volume). Chi tiết hệ quả ở `docs/AUTH_FLOW_EXPLAINED.md` mục 9.
+| `make dev` | Bật server ở chế độ watch mode (tự động bật container DB nếu chưa chạy) |
+| `make db-up` | Chỉ khởi động PostgreSQL & Redis |
+| `make db-down` | Dừng các container database (giữ nguyên dữ liệu) |
+| `make reset` | Xóa sạch database volume, khởi tạo lại container, chạy lại migrate và seed |
+| `make kill-port` | Tắt tiến trình đang chiếm port 3000 |
+| `npx prisma studio` | Mở giao diện xem/chỉnh sửa DB tại `http://localhost:5555` |
 
 ---
 
-## Thao Tác Thủ Công Với Prisma
+## 🔗 Danh Sách API Endpoints
 
-### Mở Prisma Studio Để Xem/Sửa Data Trực Tiếp
+Base URL: `http://localhost:3000`
 
-```bash
-npx prisma studio
-```
+### 1. Authentication (`/auth`)
+* `POST /auth/register` — Đăng ký tài khoản mới (mặc định gán role `USER`).
+* `POST /auth/login` — Đăng nhập, trả về cặp `accessToken` (15m) + `refreshToken` (7d).
+* `POST /auth/refresh` — Đổi refresh token cũ lấy cặp access/refresh token mới (Refresh Token Rotation).
+* `POST /auth/logout` *(Bearer Token)* — Đăng xuất session hiện tại (đưa token vào blacklist Redis).
+* `POST /auth/logout-all` *(Bearer Token)* — Đăng xuất toàn bộ các thiết bị đang đăng nhập của user.
 
-Mở UI tại `http://localhost:5555`.
+### 2. Quản lý phiên (`/auth/sessions`)
+* `GET /auth/sessions` *(Bearer Token)* — Xem danh sách các phiên thiết bị đang hoạt động (IP, User-Agent, hoạt động gần nhất).
+* `DELETE /auth/sessions/:id` *(Bearer Token)* — Thu hồi (buộc đăng xuất) một session cụ thể.
 
-### Gán Quyền ADMIN Cho Một User
+### 3. Người dùng (`/users`)
+* `GET /users/me` *(Bearer Token)* — Xem thông tin tài khoản đang đăng nhập (giải mã trực tiếp từ payload JWT).
+* `GET /users` *(Bearer Token)* — Lấy danh sách toàn bộ user (yêu cầu quyền `users:list` - dành cho `ADMIN`).
 
-Hệ thống **chưa có API quản lý role** (xem `docs/AUTH_FLOW_EXPLAINED.md` mục 11 — giới hạn đã biết), nên đây là thao tác bắt buộc phải làm tay, chưa có endpoint thay thế. Có 2 cách, chọn 1:
-
-**Cách 1 — Prisma Studio (UI):**
-
-1. Đảm bảo đã seed dữ liệu (`make setup` hoặc `pnpm run seed`) — cần có sẵn role `ADMIN` trong DB trước.
-2. `npx prisma studio` → bảng `User` → tìm đúng row theo `email` → mở quan hệ `roles` → **connect** thêm role `ADMIN` (giữ `USER` cũng được, không bắt buộc gỡ).
-
-**Cách 2 — SQL trực tiếp (khi Prisma Studio thao tác bị fail):**
-
-Quan hệ `User` ↔ `Role` là bảng trung gian ẩn `_RoleToUser` (`A` = `Role.id`, `B` = `User.id`, xem `prisma/migrations/*/migration.sql`). Đảm bảo đã seed trước (cần role `ADMIN` tồn tại), sau đó chạy:
-
-```bash
-docker exec -i auth-service-postgres psql -U postgres -d auth_service_demo <<'SQL'
-INSERT INTO "_RoleToUser" ("A", "B")
-SELECT r.id, u.id
-FROM "Role" r, "User" u
-WHERE r.name = 'ADMIN' AND u.email = 'demo-a@example.com'
-ON CONFLICT ("A", "B") DO NOTHING;
-SQL
-```
-
-Đổi `demo-a@example.com` thành email thật. `ON CONFLICT ("A", "B") DO NOTHING` khớp đúng primary key composite của `_RoleToUser`, giúp chạy lại nhiều lần vẫn an toàn (không lỗi nếu user đã có role đó). Kiểm tra lại:
-
-```bash
-docker exec -i auth-service-postgres psql -U postgres -d auth_service_demo <<'SQL'
-SELECT u.email, r.name AS role
-FROM "User" u
-JOIN "_RoleToUser" rtu ON rtu."B" = u.id
-JOIN "Role" r ON r.id = rtu."A"
-WHERE u.email = 'demo-a@example.com';
-SQL
-```
-
-Cả 2 cách xong đều cần bước cuối giống nhau:
-
-**Bước cuối (bắt buộc, áp dụng cho cả 2 cách trên):** User đó phải **gọi lại `/auth/login` hoặc `/auth/refresh`** để nhận access token mới mang role `ADMIN` — access token đang cầm trong tay **không tự cập nhật quyền**, roles/permissions bị đóng băng vào token tại thời điểm mint (xem `docs/AUTH_FLOW_EXPLAINED.md` mục 7).
-
-### Các Lệnh Prisma Khác
-
-| Lệnh | Việc làm |
-|---|---|
-| `pnpm prisma generate` | Generate lại Prisma Client sau khi đổi `prisma/schema.prisma` |
-| `pnpm prisma migrate dev` | Tạo và áp dụng migration mới (dev) khi đổi schema |
-| `pnpm run seed` | Seed lại role/permission — dùng `upsert` nên chạy lại nhiều lần vẫn an toàn |
+### 4. Hệ thống
+* `GET /health` — Liveness check kiểm tra trạng thái hoạt động của service.
+* `GET /docs` — Giao diện Swagger UI tra cứu schema và test API trực tiếp.
 
 ---
 
-## Kiểm Thử API
+## 📌 Lưu Ý Quan Trọng (Notes)
 
-### Swagger
+### 1. Gán quyền ADMIN để kiểm tra phân quyền (RBAC)
+Mặc định khi đăng ký mới, user chỉ có role `USER`. Endpoint `GET /users` yêu cầu role `ADMIN`. Bạn có thể gán quyền bằng 1 trong 2 cách:
 
-Sau khi `make dev`, mở `http://localhost:3000/docs` để xem và thử trực tiếp trên trình duyệt. Chỉ bật khi `NODE_ENV != production` (mặc định bật ở local).
+* **Cách 1 (Prisma Studio):** Chạy `npx prisma studio` → Mở bảng `User` → Tìm user cần gán → ở trường `roles` chọn **Connect existing record** và chọn `ADMIN` → Bấm **Save 1 change**.
+* **Cách 2 (Chạy lệnh SQL):**
+  ```bash
+  docker exec -i auth-service-postgres psql -U postgres -d auth_service_demo <<'SQL'
+  INSERT INTO "_RoleToUser" ("A", "B")
+  SELECT r.id, u.id FROM "Role" r, "User" u
+  WHERE r.name = 'ADMIN' AND u.email = 'demo-a@example.com'
+  ON CONFLICT ("A", "B") DO NOTHING;
+  SQL
+  ```
 
-### Postman Collection
 
-Bộ test flow đầy đủ kèm assertion tự động, nằm ở `postman/auth-service-demo.postman_collection.json` và `postman/auth-service-demo.postman_environment.json`.
+> **Lưu ý:** Sau khi gán role trong DB, user phải gọi `POST /auth/refresh` hoặc đăng nhập lại để nhận access token mới có chứa role `ADMIN` (vì quyền được nhúng tĩnh trong access token khi cấp).
 
-1. Import cả 2 file vào Postman.
-2. Chọn Environment **"auth-service-demo (local)"** ở góc trên phải (quên bước này thì mọi biến `{{baseUrl}}`, `{{accessToken1}}`, ... không resolve được).
-3. Chạy lần lượt từng folder theo thứ tự `00` → `07`.
+### 2. Redis In-Memory
+Container Redis trong `docker-compose.yml` không gắn volume để tối ưu tốc độ cho môi trường dev/demo. Khi restart Redis container, dữ liệu whitelist refresh token và blacklist access token sẽ được làm sạch (các phiên đăng nhập trước đó sẽ hết hiệu lực).
 
-   ⚠️ Riêng folder **`01 - RBAC Enforcement`**: giữa request thứ 2 (`GET /users` expect 403) và request thứ 3 (`Refresh` expect ADMIN) có **bước thủ công bắt buộc** — promote User A lên `ADMIN` qua Prisma Studio (xem mục Prisma ở trên) trước khi chạy tiếp. Bỏ qua bước này, request thứ 3 vẫn trả 200 nhưng assertion "carries ADMIN role" sẽ fail — không phải lỗi script hay lỗi server.
-
-### Test Tự Động (Jest)
-
-```bash
-pnpm run test       # unit test
-pnpm run test:e2e   # end-to-end test
-pnpm run test:cov   # coverage
-```
-
----
-
-## Giấy Phép
-
-[MIT licensed](LICENSE)
+### 3. Kiểm thử với Postman Collection
+* Import cả 2 file trong thư mục `postman/` vào Postman.
+* Chọn Environment **`auth-service-demo (local)`** trước khi chạy.
+* Chạy lần lượt các folder theo thứ tự từ `00` đến `07`.
